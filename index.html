@@ -631,7 +631,7 @@ function buildGrid() {
 // Score ramp: red (poor) → yellow (fair) → green (good) — Ben's pick for contrast.
 // Note: red↔green is the classic colorblind conflict; the score number stays in every
 // tooltip, best-window label, day chip, and the data table as the backup channel.
-const SEQ = ['#c1272d','#cf3d2a','#dc5226','#e76a24','#f08222','#f79c1e','#fab219','#d3b31c','#a8ad20','#7ea426','#569a2b','#328e2e','#117f31'];
+const SEQ = ['#d63b2f','#e0512c','#ea672a','#f07d27','#f59425','#f8ab23','#f7c525','#eed82b','#c9d434','#9fc63c','#74b544','#4ea44a','#33914b'];
 function seqColor(score) { // 0..10 → ramp, deliberately stingy: green must be earned
   const cuts = [2.0, 3.0, 3.8, 4.6, 5.2, 5.8, 6.4, 7.0, 7.6, 8.2, 8.8, 9.4]; // upper bound per color slot
   let i = cuts.findIndex(c => score < c);
