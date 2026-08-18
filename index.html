@@ -86,11 +86,19 @@
   }
   button.ghost:hover { color: var(--text-primary); }
   button.primary {
-    font: inherit; font-size: 12.5px; font-weight: 650; color: #ffffff;
-    background: var(--seq-450); border: 1px solid var(--seq-550); border-radius: 8px;
-    padding: 5px 12px; cursor: pointer;
+    font: inherit; font-size: 14px; font-weight: 650; color: #ffffff;
+    background: var(--seq-450); border: 1px solid var(--seq-550); border-radius: 9px;
+    padding: 8px 16px; cursor: pointer;
   }
   button.primary:hover { background: var(--seq-500); }
+  button.cta {
+    font: inherit; font-size: 16px; font-weight: 700; color: #ffffff;
+    background: var(--seq-450); border: 1px solid var(--seq-550); border-radius: 12px;
+    padding: 14px 20px; cursor: pointer; width: 100%; display: block;
+    margin: 0 0 18px; letter-spacing: 0.01em;
+  }
+  button.cta:hover { background: var(--seq-500); }
+  button.cta .cta-sub { display: block; font-size: 12px; font-weight: 500; opacity: 0.85; margin-top: 3px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 18px; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
@@ -193,9 +201,11 @@
 
     <div class="grid-tiles" id="tiles"></div>
 
+    <button class="cta" id="rateBtn2">Just surfed here? Rate the surf<span class="cta-sub">60-second report — every rating makes this forecast smarter</span></button>
+
     <section class="card">
       <h2>Best windows</h2>
-      <div class="cap">Hourly surf score 5am–8pm (0–10) · darker = better · boxed = best window of the day</div>
+      <div class="cap">Hourly surf score 5am–8pm (0–10) · red = poor, yellow = fair, green = go · boxed = best window of the day</div>
       <div id="windows"></div>
     </section>
 
@@ -618,9 +628,14 @@ function buildGrid() {
 }
 
 /* ---------------- Rendering helpers ---------------- */
-const SEQ = ['#cde2fb','#b7d3f6','#9ec5f4','#86b6ef','#6da7ec','#5598e7','#3987e5','#2a78d6','#256abf','#1c5cab','#184f95','#104281','#0d366b'];
-function seqColor(score) { // 0..10 → ramp
-  const i = clamp(Math.round(score / 10 * (SEQ.length - 1)), 0, SEQ.length - 1);
+// Score ramp: red (poor) → yellow (fair) → green (good) — Ben's pick for contrast.
+// Note: red↔green is the classic colorblind conflict; the score number stays in every
+// tooltip, best-window label, day chip, and the data table as the backup channel.
+const SEQ = ['#c1272d','#cf3d2a','#dc5226','#e76a24','#f08222','#f79c1e','#fab219','#d3b31c','#a8ad20','#7ea426','#569a2b','#328e2e','#117f31'];
+function seqColor(score) { // 0..10 → ramp, deliberately stingy: green must be earned
+  const cuts = [2.0, 3.0, 3.8, 4.6, 5.2, 5.8, 6.4, 7.0, 7.6, 8.2, 8.8, 9.4]; // upper bound per color slot
+  let i = cuts.findIndex(c => score < c);
+  if (i === -1) i = SEQ.length - 1;
   return SEQ[i];
 }
 function inkFor(hex) {
@@ -1167,6 +1182,7 @@ function openForm() {
   window.open(CONFIG.form.url + '?usp=pp_url&' + CONFIG.form.snapshotEntry + '=' + encodeURIComponent(snap), '_blank');
 }
 $('rateBtn').addEventListener('click', openForm);
+$('rateBtn2').addEventListener('click', openForm);
 
 $('refreshBtn').addEventListener('click', loadAll);
 $('themeBtn').addEventListener('click', () => {
