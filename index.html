@@ -85,6 +85,12 @@
     padding: 5px 11px; cursor: pointer;
   }
   button.ghost:hover { color: var(--text-primary); }
+  button.primary {
+    font: inherit; font-size: 12.5px; font-weight: 650; color: #ffffff;
+    background: var(--seq-450); border: 1px solid var(--seq-550); border-radius: 8px;
+    padding: 5px 12px; cursor: pointer;
+  }
+  button.primary:hover { background: var(--seq-500); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 18px; }
   .chip {
     display: inline-flex; align-items: center; gap: 6px;
@@ -175,9 +181,10 @@
     </div>
     <header class="top">
       <h1>Poppy's Beach</h1>
-      <span class="sub">2023 S Pacific St, Oceanside · MOP&nbsp;D0872 · model v0.1 (uncalibrated)</span>
+      <span class="sub">2023 S Pacific St, Oceanside · MOP&nbsp;D0872 · model v0.2 · 1 session logged</span>
       <div class="toolbar">
         <span class="sub" id="updated">loading…</span>
+        <button class="primary" id="rateBtn">Rate the surf</button>
         <button class="ghost" id="refreshBtn">Refresh</button>
         <button class="ghost" id="themeBtn">Theme</button>
       </div>
@@ -239,10 +246,11 @@
    ================================================================ */
 
 const CALIBRATION = {
-  version: '0.1',
+  version: '0.2',
   updated: '2026-08-18',
-  sessions: 0,               // logged sessions folded in so far
-  sizeFactor: 1.00,          // multiplies estimated breaking face height
+  scoreGamma: 2.0,           // curve-hardener: reserves 8–10 for rare days
+  sessions: 1,               // logged sessions folded in so far
+  sizeFactor: 0.85,          // s1: model said 4.0–4.2 ft, Ben saw mostly 3 rare 4 sets
   tideLoFt: 1.5, tideHiFt: 4.0,  // preferred tide band (ft MLLW) — placeholder
   risingBonus: 0.10,         // score bonus while tide is rising
   swellWindowDeg: [180, 265],    // directions that reach the beach at full energy
@@ -262,6 +270,10 @@ const CONFIG = {
   tideStation: '9410230',   // La Jolla (open-coast harmonic; Oceanside ≈ same phase)
   tz: 'America/Los_Angeles',
   depthM: 10,
+  form: {
+    url: 'https://docs.google.com/forms/d/e/1FAIpQLSdsWos-gbskwt6ahlOfz3rCNxOAPgJMmhuexXMPzbmN60X7oQ/viewform',
+    snapshotEntry: 'entry.1698408031',
+  },
 };
 
 const state = { feeds: {}, data: {}, tips: {} };
@@ -532,34 +544,52 @@ function trapezoid(x, a, b, c, d) { // 0 below a, ramps to 1 at b..c, 0 above d
   return (d - x) / (d - c);
 }
 function sizeScore(faceFt) {
+  // near-triangle: 1.0 only right at the sweet spot, graded everywhere else
   const [lo, hi] = CALIBRATION.funFaceFt;
-  return trapezoid(faceFt, 0.8, lo, hi, hi + 4);
+  const peak = (lo + hi) / 2;
+  return trapezoid(faceFt, 0.8, peak - 0.4, peak + 0.4, hi + 4);
 }
 function windScore(spdKt, dirDeg) {
   if (spdKt == null) return 0.6;
-  if (spdKt < 4.5) return 1.0;                                 // glassy
   const offshore = dirDeg != null && inWindow(dirDeg, CALIBRATION.offshoreDeg);
-  if (offshore) return spdKt < 14 ? 1.0 : clamp(1 - (spdKt - 14) / 12, 0.3, 1);
+  if (spdKt < 3) return 1.0;                                   // true glass — rare
+  if (spdKt < 4.5) return offshore ? 0.97 : 0.92;              // light texture
+  if (offshore) return spdKt < 12 ? 0.97 : clamp(1 - (spdKt - 12) / 12, 0.3, 0.97);
   const sideOn = dirDeg == null || inWindow(dirDeg, [200, 340]); // W/NW onshore worst
-  const start = sideOn ? 5 : 8, span = sideOn ? 11 : 14;
-  return clamp(1 - (spdKt - start) / span, 0, 1);
+  const start = sideOn ? 4.5 : 7, span = sideOn ? 10 : 13;
+  return clamp(0.88 - (spdKt - start) / span, 0, 0.88);
 }
 function tideScore(ft, risingFtPerHr) {
   const { tideLoFt, tideHiFt, risingBonus } = CALIBRATION;
-  let s = trapezoid(ft, tideLoFt - 1.6, tideLoFt, tideHiFt, tideHiFt + 1.8);
-  if (risingFtPerHr > 0.1) s = clamp(s + risingBonus, 0, 1);
+  const mid = (tideLoFt + tideHiFt) / 2;
+  let s = trapezoid(ft, tideLoFt - 1.8, mid - 0.7, mid + 0.7, tideHiFt + 2);
+  if (risingFtPerHr > 0.1) s = clamp(s + risingBonus * 0.8, 0, 1);
   return s;
 }
-function shapeScore(tpS, dpDeg) {
-  let s = tpS >= 14 ? 1.0 : tpS >= 11 ? 0.8 : tpS >= 9 ? 0.55 : 0.35;
+function shapeScore(tpS, dpDeg, faceFt) {
+  // s1: very long-period S swell breaks thick/fast/close on this inside bar —
+  // 12–16s is the spot's sweet spot until logs say otherwise
+  let s = tpS >= 17 ? 0.85 : tpS >= 14 ? 0.88 : tpS >= 11 ? 0.72 : tpS >= 9 ? 0.5 : 0.32;
   if (dpDeg != null && !inWindow(dpDeg, CALIBRATION.swellWindowDeg)) s *= 0.7;
+  // beach-break closeout risk: long-period + size tends to wall on open sandbars
+  if (tpS >= 15 && faceFt != null && faceFt > 4.5) s *= 0.85;
   return s;
 }
 function hourScore(faceFt, tpS, dpDeg, windKt, windDir, tideFt, tideSlope) {
   if (faceFt == null) return null;
   const w = CALIBRATION.weights;
-  const s = w.size * sizeScore(faceFt) + w.wind * windScore(windKt, windDir) +
-            w.tide * tideScore(tideFt, tideSlope) + w.shape * shapeScore(tpS, dpDeg);
+  // geometric combination: any weak factor drags the whole score down
+  // (a flawless size can't paper over junk wind the way an average can)
+  const eps = 0.02;
+  const g = Math.exp(
+    w.size * Math.log(Math.max(eps, sizeScore(faceFt))) +
+    w.wind * Math.log(Math.max(eps, windScore(windKt, windDir))) +
+    w.tide * Math.log(Math.max(eps, tideScore(tideFt, tideSlope))) +
+    w.shape * Math.log(Math.max(eps, shapeScore(tpS, dpDeg, faceFt)))
+  );
+  // gamma squash recenters the scale: ~0.85 combined ("solid morning") → ~7,
+  // ~0.7 ("okay") → ~5, ~0.55 → ~3. Only near-perfect everything reaches 9+.
+  const s = Math.pow(g, CALIBRATION.scoreGamma);
   return Math.round(s * 100) / 10; // 0–10
 }
 
@@ -1048,8 +1078,12 @@ function renderCalib() {
   box.appendChild(p1);
   const p2 = el('p');
   p2.style.marginTop = '8px';
-  p2.appendChild(document.createTextNode('To log a session: tap the button, paste it into your Poppys beach chat with Claude, and fill in what you saw. Claude refits the model and issues an updated dashboard.'));
+  p2.appendChild(document.createTextNode('Surfed here? Tap "Rate the surf" (top of page) — a 60-second questionnaire that anyone with this link can fill out. Every report is compared against what the model predicted for that hour and sharpens the forecast.'));
   box.appendChild(p2);
+  const p2b = el('p');
+  p2b.style.marginTop = '8px';
+  p2b.appendChild(document.createTextNode('(Ben: the detailed session-log template below still works too and carries the most weight.)'));
+  box.appendChild(p2b);
   const btn = el('button', 'ghost', 'Copy session log template');
   btn.style.marginTop = '10px';
   btn.addEventListener('click', () => {
@@ -1111,6 +1145,28 @@ async function loadAll() {
     'Breaking height estimated from 10 m-depth Hs via linear-theory de-shoaling + Komar–Gaughan breaker formula, then a spot calibration factor. ' +
     'Forecast quality degrades past ~3 days. This is a personal model — surf at your own risk.';
 }
+
+/* ---------------- Community report form ---------------- */
+function openForm() {
+  const now = Date.now();
+  const g = (buildGrid() || []).find(x => Math.abs(x.t - now) < 3600e3);
+  const parts = [
+    fmtT(now, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }),
+    'model v' + CALIBRATION.version,
+  ];
+  if (g) {
+    parts.push('face ' + faceLabel(g.face));
+    parts.push('score ' + (g.score == null ? '—' : g.score.toFixed(1)));
+    parts.push('tide ' + g.tideFt.toFixed(1) + 'ft' + (g.tideSlope > 0 ? ' rising' : ' falling'));
+    parts.push('wind ' + (g.windKt == null ? '—' : Math.round(g.windKt) + 'kt ' + degToCompass(g.windDir)));
+    parts.push('swell ' + (g.hs == null ? '—' : g.hs.toFixed(2) + 'm') + ' ' + Math.round(g.tp || 0) + 's ' + Math.round(g.dp || 0) + '°');
+  }
+  const b = state.data.buoy;
+  if (b && b.hsM != null) parts.push('buoy ' + b.hsM.toFixed(2) + 'm' + (b.tpS ? ' ' + Math.round(b.tpS) + 's' : '') + (b.dirDeg != null ? ' ' + Math.round(b.dirDeg) + '°' : ''));
+  const snap = parts.join(' | ');
+  window.open(CONFIG.form.url + '?usp=pp_url&' + CONFIG.form.snapshotEntry + '=' + encodeURIComponent(snap), '_blank');
+}
+$('rateBtn').addEventListener('click', openForm);
 
 $('refreshBtn').addEventListener('click', loadAll);
 $('themeBtn').addEventListener('click', () => {
