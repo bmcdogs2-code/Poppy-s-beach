@@ -189,7 +189,7 @@
     </div>
     <header class="top">
       <h1>Poppy's Beach</h1>
-      <span class="sub">2023 S Pacific St, Oceanside · MOP&nbsp;D0872 · model v0.3 · 4 reports logged</span>
+      <span class="sub">2023 S Pacific St, Oceanside · MOP&nbsp;D0872 · model v0.3 · 1 session logged</span>
       <div class="toolbar">
         <span class="sub" id="updated">loading…</span>
         <button class="primary" id="rateBtn">Rate the surf</button>
@@ -257,18 +257,20 @@
 
 const CALIBRATION = {
   version: '0.3',
-  updated: '2026-08-20',
+  updated: '2026-08-21',
   scoreGamma: 2.0,           // curve-hardener: reserves 8–10 for rare days
-  sessions: 4,               // reports folded in: 1 Ben session + 3 community
+  sessions: 1,               // logged sessions folded in so far
   sizeFactor: 0.85,          // s1: model said 4.0–4.2 ft, Ben saw mostly 3 rare 4 sets
-  tideLoFt: 2.5, tideHiFt: 5.0,  // v0.3: shifted UP. 8/19 1:30pm (two skill-5 reports,
-                                 // tide 4.7 ft) → ride 3, power 3, breaking 2–3, rated 7.
-                                 // s1 (tide 2.7–3.3 ft, same ~14 s period) → ride 2, power 4,
-                                 // breaking 2. Higher tide = further out, thinner, longer rides.
+  tideLoFt: 1.5, tideHiFt: 4.0,  // preferred tide band (ft MLLW) — placeholder
   risingBonus: 0.10,         // score bonus while tide is rising
   swellWindowDeg: [180, 265],    // directions that reach the beach at full energy
   offshoreDeg: [40, 130],        // wind FROM these directions grooms the face
-  funFaceFt: [2, 6],             // size sweet spot (face, ft) — placeholder
+  // v0.3: bigger is better up to overhead (Ben, 2026-08-21). Monotone ramp to a
+  // 5.5–8 ft plateau, then decay — replaces the old [2,6] band that peaked at 4 ft
+  // and buried the biggest day of the week below chest-high glass.
+  sizeCurve: [[0,0],[1.0,0.15],[2.0,0.45],[3.0,0.68],[4.0,0.84],[5.0,0.95],
+              [5.5,1.00],[8.0,1.00],[10.0,0.55],[12.0,0.20],[14.0,0]],
+  funFaceFt: [5.5, 8],           // peak band (face, ft) — display + docs
   weights: { size: 0.35, wind: 0.30, tide: 0.20, shape: 0.15 },
 };
 
@@ -289,7 +291,7 @@ const CONFIG = {
   },
 };
 
-const state = { feeds: {}, data: {}, tips: {}, lastGrid: null };
+const state = { feeds: {}, data: {}, tips: {} };
 
 /* ---------------- utilities ---------------- */
 const $ = (id) => document.getElementById(id);
@@ -557,10 +559,18 @@ function trapezoid(x, a, b, c, d) { // 0 below a, ramps to 1 at b..c, 0 above d
   return (d - x) / (d - c);
 }
 function sizeScore(faceFt) {
-  // near-triangle: 1.0 only right at the sweet spot, graded everywhere else
-  const [lo, hi] = CALIBRATION.funFaceFt;
-  const peak = (lo + hi) / 2;
-  return trapezoid(faceFt, 0.8, peak - 0.4, peak + 0.4, hi + 4);
+  // piecewise-linear preference curve (CALIBRATION.sizeCurve): rises steadily with
+  // size, tops out head-high–overhead, falls off when it gets out of hand.
+  if (faceFt == null) return 0;
+  const P = CALIBRATION.sizeCurve;
+  if (faceFt <= P[0][0] || faceFt >= P[P.length - 1][0]) return 0;
+  for (let i = 1; i < P.length; i++) {
+    if (faceFt <= P[i][0]) {
+      const [x0, y0] = P[i - 1], [x1, y1] = P[i];
+      return y0 + (y1 - y0) * (faceFt - x0) / (x1 - x0);
+    }
+  }
+  return 0;
 }
 function windScore(spdKt, dirDeg) {
   if (spdKt == null) return 0.6;
@@ -569,9 +579,7 @@ function windScore(spdKt, dirDeg) {
   if (spdKt < 4.5) return offshore ? 0.97 : 0.92;              // light texture
   if (offshore) return spdKt < 12 ? 0.97 : clamp(1 - (spdKt - 12) / 12, 0.3, 0.97);
   const sideOn = dirDeg == null || inWindow(dirDeg, [200, 340]); // W/NW onshore worst
-  // v0.3: onshore ramp softened (was 4.5 kt / span 10). 8/19 afternoon at 7 kt W was
-  // marked glassiness 3–4 of 5 by both reporters — the old curve called that half-blown.
-  const start = sideOn ? 6 : 7, span = sideOn ? 13 : 13;
+  const start = sideOn ? 4.5 : 7, span = sideOn ? 10 : 13;
   return clamp(0.88 - (spdKt - start) / span, 0, 0.88);
 }
 function tideScore(ft, risingFtPerHr) {
@@ -584,9 +592,7 @@ function tideScore(ft, risingFtPerHr) {
 function shapeScore(tpS, dpDeg, faceFt) {
   // s1: very long-period S swell breaks thick/fast/close on this inside bar —
   // 12–16s is the spot's sweet spot until logs say otherwise
-  // v0.3: ≥17 s tier 0.85 → 0.80 (second "breaks right on the sand" report on a 17 s
-  // swell — 8/19 dawn, but from the north end, so only a partial move)
-  let s = tpS >= 17 ? 0.80 : tpS >= 14 ? 0.88 : tpS >= 11 ? 0.72 : tpS >= 9 ? 0.5 : 0.32;
+  let s = tpS >= 17 ? 0.85 : tpS >= 14 ? 0.88 : tpS >= 11 ? 0.72 : tpS >= 9 ? 0.5 : 0.32;
   if (dpDeg != null && !inWindow(dpDeg, CALIBRATION.swellWindowDeg)) s *= 0.7;
   // beach-break closeout risk: long-period + size tends to wall on open sandbars
   if (tpS >= 15 && faceFt != null && faceFt > 4.5) s *= 0.85;
@@ -611,19 +617,6 @@ function hourScore(faceFt, tpS, dpDeg, windKt, windDir, tideFt, tideSlope) {
 }
 
 /* ---------------- Score grid ---------------- */
-// v0.3: a report submitted while the feeds are down used to send an empty snapshot
-// (this happened on the 8/19 14:49 row), leaving the row un-pairable. Keep the last
-// good grid and fall back to the nearest hour in it.
-function currentCell() {
-  const now = Date.now();
-  let grid = buildGrid();
-  if (!grid || !grid.length) grid = state.lastGrid || [];
-  if (!grid.length) return null;
-  let best = null, bd = Infinity;
-  for (const g of grid) { const d = Math.abs(g.t - now); if (d < bd) { bd = d; best = g; } }
-  return bd < 6 * 3600e3 ? best : null;
-}
-
 function buildGrid() {
   const { mopF, tide, wind } = state.data;
   if (!mopF) return [];
@@ -1106,10 +1099,10 @@ function renderCalib() {
   const c = CALIBRATION;
   const box = $('calib'); box.textContent = '';
   const p1 = el('p');
-  p1.appendChild(el('strong', null, 'Model v' + c.version + ' — ' + c.sessions + ' reports folded in. '));
+  p1.appendChild(el('strong', null, 'Model v' + c.version + ' — ' + c.sessions + ' sessions logged. '));
   p1.appendChild(document.createTextNode('Current settings: size factor ' + c.sizeFactor.toFixed(2) +
     ', preferred tide ' + c.tideLoFt + '–' + c.tideHiFt + ' ft, swell window ' + c.swellWindowDeg[0] + '°–' + c.swellWindowDeg[1] +
-    '°, fun size ' + c.funFaceFt[0] + '–' + c.funFaceFt[1] + ' ft face. The tide band and wind tolerance are now fitted to logged sessions; size and swell window are still physics defaults.'));
+    '°, best size ' + c.funFaceFt[0] + '–' + c.funFaceFt[1] + ' ft face (bigger is better up to overhead). Anchored to Ben\'s logged ratings — sharper with every session.'));
   box.appendChild(p1);
   const p2 = el('p');
   p2.style.marginTop = '8px';
@@ -1123,7 +1116,7 @@ function renderCalib() {
   btn.style.marginTop = '10px';
   btn.addEventListener('click', () => {
     const now = Date.now();
-    const g = currentCell();
+    const g = (buildGrid() || []).find(x => Math.abs(x.t - now) < 3600e3);
     const txt = 'SURF LOG — ' + fmtT(now, { year: 'numeric', month: '2-digit', day: '2-digit', hour: 'numeric', minute: '2-digit' }) +
       '\nDashboard said: ' + (g ? faceLabel(g.face) + ' face, score ' + (g.score == null ? '—' : g.score.toFixed(1)) + ', tide ' + g.tideFt.toFixed(1) + 'ft, wind ' + (g.windKt == null ? '—' : Math.round(g.windKt) + 'kt ' + degToCompass(g.windDir)) : 'n/a') +
       '\nWhat I actually saw (size, e.g. waist/chest or ft): ' +
@@ -1170,7 +1163,6 @@ async function loadAll() {
   const allDown = !state.data.mopF && !state.data.tide && !state.data.wind;
   $('banner').style.display = allDown ? 'block' : 'none';
   const grid = buildGrid();
-  if (grid.length) state.lastGrid = grid;
   renderTiles();
   renderWindows(grid);
   renderCharts(grid);
@@ -1185,7 +1177,7 @@ async function loadAll() {
 /* ---------------- Community report form ---------------- */
 function openForm() {
   const now = Date.now();
-  const g = currentCell();
+  const g = (buildGrid() || []).find(x => Math.abs(x.t - now) < 3600e3);
   const parts = [
     fmtT(now, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }),
     'model v' + CALIBRATION.version,
